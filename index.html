@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BookSync">
+<meta name="theme-color" content="#14171c">
+<title>BookSync — Lector + Audio</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+  :root {
+    --ink: #e8e2d4;
+    --bg: #14171c;
+    --bg-panel: #1c2027;
+    --line: #3a4048;
+    --accent: #8a9a5b;
+    --accent-dim: #5f6b42;
+    --muted: #9aa0a8;
+    --muted-2: #6b7178;
+    --warn: #c97b5a;
+    --warn-bg: rgba(201,123,90,0.12);
+    --danger: #b5543f;
+    --read-bg: #14171c;
+    --read-fg: #e8e2d4;
+  }
+  body.light {
+    --ink: #111111;
+    --bg: #ffffff;
+    --bg-panel: #f5f5f5;
+    --line: #dcdcdc;
+    --accent: #5f7233;
+    --accent-dim: #dfe6cd;
+    --muted: #555555;
+    --muted-2: #888888;
+    --warn: #a8502e;
+    --warn-bg: rgba(168,80,46,0.10);
+    --danger: #a8502e;
+    --read-bg: #ffffff;
+    --read-fg: #111111;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: 'Spectral', serif;
+    display: flex; flex-direction: column; height: 100vh; transition: background 0.2s, color 0.2s;
+  }
+
+  /* ---------- Top bar ---------- */
+  #topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+    background: var(--bg-panel); border-bottom: 1px solid var(--line);
+    z-index: 20; flex-shrink: 0;
+  }
+  #bookTitleDisplay {
+    font-size: 14px; font-weight: 600; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw;
+  }
+  .top-left { display: flex; align-items: center; gap: 8px; }
+  .status-dots { display: flex; gap: 4px; }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--line);
+  }
+  .status-dot.loaded { background: var(--accent); }
+  .top-actions { display: flex; gap: 6px; }
+  .icon-btn {
+    background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    width: 34px; height: 34px; border-radius: 8px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .icon-btn:active { background: var(--accent-dim); }
+  .icon-btn svg { width: 17px; height: 17px; }
+
+  /* ---------- Screens ---------- */
+  #screens { flex: 1; position: relative; overflow: hidden; }
+  .screen { position: absolute; inset: 0; display: none; }
+  .screen.active { display: block; }
+
+  /* ---------- Reader screen ---------- */
+  #readerWrap { position: absolute; inset: 0; overflow: hidden; background: var(--read-bg); }
+  #viewer { position: absolute; inset: 0; }
+  #tapLeft, #tapRight { position: absolute; top: 0; bottom: 0; width: 22%; z-index: 5; }
+  #tapLeft { left: 0; } #tapRight { right: 0; }
+
+  #emptyState {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; padding: 30px;
+    background: var(--bg); color: var(--muted); z-index: 8;
+  }
+  #emptyState.hide { display: none; }
+  #emptyState .eyebrow {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 10px;
+  }
+  #emptyState h1 { font-size: 20px; margin: 0 0 10px; color: var(--ink); }
+  #emptyState p { font-size: 13.5px; line-height: 1.6; max-width: 300px; margin: 0 0 22px; }
+  .file-btn {
+    background: var(--accent-dim); color: var(--ink); border: none; padding: 12px 20px;
+    border-radius: 9px; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; margin-bottom: 10px;
+    width: 240px;
+  }
+
+  #loadingOverlay {
+    position: absolute; inset: 0; background: rgba(20,23,28,0.92);
+    display: flex; align-items: center; justify-content: center; z-index: 30;
+    color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  }
+  #loadingOverlay.hidden { display: none; }
+
+  #errorBanner {
+    position: absolute; top: 8px; left: 8px; right: 8px; z-index: 25;
+    background: var(--warn-bg); border: 1px solid var(--warn); color: var(--warn);
+    font-size: 12px; padding: 10px 12px; border-radius: 8px; display: none;
+  }
+  #errorBanner.show { display: block; }
+
+  #progressIndicator {
+    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 15; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;
+    color: var(--muted-2); background: var(--bg-panel); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 20px; opacity: 0.9; pointer-events: none;
+  }
+
+  /* ---------- Audio screen (full page) ---------- */
+  #audioScreen {
+    background: var(--bg); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 30px; text-align: center;
+  }
+  #audioScreen.no-audio .audio-controls { opacity: 0.35; pointer-events: none; }
+  .audio-cover {
+    width: 180px; height: 180px; border-radius: 14px; background: var(--bg-panel);
+    border: 1px solid var(--line); display: flex; align-items: center; justify-content: center;
+    margin-bottom: 26px; color: var(--accent);
+  }
+  .audio-cover svg { width: 60px; height: 60px; }
+  #audioTitle { font-size: 17px; font-weight: 600; margin-bottom: 30px; max-width: 300px; }
+  .audio-controls { width: 100%; max-width: 340px; }
+  .audio-row1 { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .audio-row1 input[type="range"] {
+    flex: 1; -webkit-appearance: none; height: 3px; background: var(--line); border-radius: 2px; outline: none;
+  }
+  .audio-row1 input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent);
+  }
+  .time-label { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--muted-2); min-width: 44px; text-align: center; }
+  .audio-row2 { display: flex; align-items: center; justify-content: center; gap: 22px; margin-top: 10px; }
+  .audio-row2 .icon-btn { width: 46px; height: 46px; border-radius: 50%; }
+  .audio-row2 .play-btn { width: 62px; height: 62px; background: var(--accent-dim); }
+  .audio-row2 .play-btn svg { width: 26px; height: 26px; }
+  #speedBtn { font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+
+  /* ---------- Bottom tab bar ---------- */
+  #tabBar {
+    display: flex; background: var(--bg-panel); border-top: 1px solid var(--line);
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); flex-shrink: 0; z-index: 20;
+  }
+  .tab-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    background: none; border: none; color: var(--muted); padding: 6px; cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.03em; text-transform: uppercase;
+  }
+  .tab-btn svg { width: 20px; height: 20px; }
+  .tab-btn.active { color: var(--accent); }
+
+  /* ---------- Sheets / overlays ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 60;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  .overlay.hidden { display: none; }
+  .sheet {
+    background: var(--bg-panel); border: 1px solid var(--line); border-radius: 16px 16px 0 0;
+    padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+    width: 100%; max-width: 480px; max-height: 82vh; overflow-y: auto;
+  }
+  .sheet h2 { font-size: 16px; margin: 0 0 16px; display: flex; justify-content: space-between; align-items: center; }
+  .sheet-close { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+  .sheet-section { margin-bottom: 22px; }
+  .sheet-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+  .btn-row { display: flex; gap: 8px; }
+  .opt-btn {
+    flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    padding: 10px 6px; border-radius: 8px; font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px; cursor: pointer;
+  }
+  .opt-btn.active { background: var(--accent-dim); color: var(--ink); border-color: var(--accent); }
+  .stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .stepper .icon-btn { width: 38px; height: 38px; }
+  .stepper .value { font-family: 'IBM Plex Mono', monospace; font-size: 15px; min-width: 50px; text-align: center; }
+
+  .sync-info-row {
+    display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px; color: var(--muted); margin-bottom: 14px; padding: 10px 12px;
+    background: var(--bg); border-radius: 8px; border: 1px solid var(--line);
+  }
+  .sync-actions { display: flex; gap: 8px; margin-bottom: 16px; }
+  .sync-actions button {
+    flex: 1; padding: 11px; border-radius: 8px; border: none; cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.03em; text-transform: uppercase;
+  }
+  .btn-add-point { background: var(--accent-dim); color: var(--ink); }
+  .btn-secondary { background: var(--bg); color: var(--ink); border: 1px solid var(--line) !important; }
+
+  .point-list { display: flex; flex-direction: column; gap: 6px; }
+  .point-item {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+    padding: 8px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;
+  }
+  .point-item button { background: none; border: none; color: var(--warn); font-size: 14px; cursor: pointer; padding: 0 4px; }
+  .empty-points { font-size: 12px; color: var(--muted-2); text-align: center; padding: 10px; }
+  .hint-text { font-size: 12px; color: var(--muted-2); line-height: 1.5; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="top-left">
+    <div id="bookTitleDisplay">BookSync</div>
+    <div class="status-dots">
+      <span class="status-dot" id="epubDot" title="EPUB"></span>
+      <span class="status-dot" id="audioDot" title="Audio"></span>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button class="icon-btn" id="tocBtn" title="chapters">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    </button>
+    <button class="icon-btn" id="syncBtn" title="sync">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 8a8 8 0 0 0-14.9-3M4 16a8 8 0 0 0 14.9 3"/></svg>
+    </button>
+    <button class="icon-btn" id="themeBtn" title="theme">☾</button>
+    <button class="icon-btn" id="settingsBtn" title="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
+    </button>
+    <button class="icon-btn" id="importBtn" title="import">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+    </button>
+  </div>
+</div>
+
+<div id="screens">
+  <div class="screen active" id="readerScreen">
+    <div id="readerWrap">
+      <div id="viewer"></div>
+      <div id="tapLeft"></div>
+      <div id="tapRight"></div>
+      <div id="loadingOverlay" class="hidden">Cargando…</div>
+      <div id="errorBanner"></div>
+      <div id="progressIndicator">—</div>
+    </div>
+    <div id="emptyState">
+      <div class="eyebrow">BookSync</div>
+      <h1>Lector + Audiolibro</h1>
+      <p>Importa tu EPUB y tu archivo de audio para empezar. Todo se guarda en este dispositivo — nada se sube a ningún sitio.</p>
+      <button class="file-btn" id="pickEpubBtnEmpty">Elegir archivo EPUB</button>
+      <button class="file-btn" id="pickAudioBtnEmpty">Elegir archivo de audio</button>
+    </div>
+  </div>
+
+  <div class="screen" id="audioScreenWrap">
+    <div id="audioScreen" class="no-audio">
+      <div class="audio-cover">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="2.5" y="14" width="4" height="6" rx="1.5"/><rect x="17.5" y="14" width="4" height="6" rx="1.5"/></svg>
+      </div>
+      <div id="audioTitle">Ningún audio cargado</div>
+      <div class="audio-controls">
+        <div class="audio-row1">
+          <span class="time-label" id="curTimeLabel">00:00:00</span>
+          <input type="range" id="seekBar" min="0" max="100" value="0" step="0.1">
+          <span class="time-label" id="remTimeLabel">-00:00:00</span>
+        </div>
+        <div class="audio-row2">
+          <button class="icon-btn" id="back15Btn" title="-15s">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+          </button>
+          <button class="icon-btn play-btn" id="playBtn" title="play">
+            <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7Z"/></svg>
+          </button>
+          <button class="icon-btn" id="fwd15Btn" title="+15s">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+          </button>
+          <button class="icon-btn" id="speedBtn" title="speed">1x</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="tabBar">
+  <button class="tab-btn active" data-screen="readerScreen">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5c-1.5-1.2-3.6-1.5-6-1V17c2.4-.5 4.5-.2 6 1 1.5-1.2 3.6-1.5 6-1V4c-2.4-.5-4.5-.2-6 1Z"/><path d="M12 5v13"/></svg>
+    Leer
+  </button>
+  <button class="tab-btn" data-screen="audioScreenWrap">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="2.5" y="14" width="4" height="6" rx="1.5"/><rect x="17.5" y="14" width="4" height="6" rx="1.5"/></svg>
+    Escuchar
+  </button>
+</div>
+
+<input type="file" id="epubFileInput" accept=".epub" style="display:none;">
+<input type="file" id="audioFileInput" accept="audio/*,.mp3,.m4a,.m4b,.aac,.wav,.ogg,.oga,.flac,.opus,audio/mp4,audio/x-m4a,audio/x-m4b" style="display:none;">
+
+<!-- Chapters (TOC) sheet -->
+<div class="overlay hidden" id="tocOverlay">
+  <div class="sheet">
+    <h2>Capítulos <button class="sheet-close" id="closeToc">✕</button></h2>
+    <div class="point-list" id="tocList"></div>
+  </div>
+</div>
+
+<!-- Import sheet -->
+<div class="overlay hidden" id="importOverlay">
+  <div class="sheet">
+    <h2>Importar archivos <button class="sheet-close" id="closeImport">✕</button></h2>
+    <div class="sheet-section">
+      <div class="sheet-label">Libro (EPUB)</div>
+      <button class="file-btn" id="pickEpubBtn" style="width:100%;">Elegir archivo EPUB</button>
+    </div>
+    <div class="sheet-section">
+      <div class="sheet-label">Audiolibro</div>
+      <button class="file-btn" id="pickAudioBtn" style="width:100%;">Elegir archivo de audio</button>
+    </div>
+    <p class="hint-text">Ambos archivos se guardan localmente en este dispositivo, así que no hace falta volver a importarlos cada vez que abras la app — solo si cambias de libro.</p>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div class="overlay hidden" id="settingsOverlay">
+  <div class="sheet">
+    <h2>Ajustes de lectura <button class="sheet-close" id="closeSettings">✕</button></h2>
+    <div class="sheet-section">
+      <div class="sheet-label">Tamaño de letra</div>
+      <div class="stepper">
+        <button class="icon-btn" id="fontMinusBtn">A-</button>
+        <div class="value" id="fontSizeValue">100%</div>
+        <button class="icon-btn" id="fontPlusBtn">A+</button>
+      </div>
+    </div>
+    <div class="sheet-section">
+      <div class="sheet-label">Desplazamiento</div>
+      <div class="btn-row">
+        <button class="opt-btn active" data-flow="paginated">Paso de página</button>
+        <button class="opt-btn" data-flow="scrolled-doc">Vertical continuo</button>
+      </div>
+    </div>
+    <p class="hint-text">El modo claro/oscuro (botón ☾/☀ arriba) afecta a toda la app, incluida la página del libro.</p>
+  </div>
+</div>
+
+<!-- Sync sheet -->
+<div class="overlay hidden" id="syncOverlay">
+  <div class="sheet">
+    <h2>Sincronización <button class="sheet-close" id="closeSync">✕</button></h2>
+    <div class="sync-info-row">
+      <span id="syncCurrentPercent">Página: —</span>
+      <span id="syncCurrentAudio">Audio: —</span>
+    </div>
+    <div class="sync-actions">
+      <button class="btn-add-point" id="addSyncPointBtn">+ Añadir punto aquí</button>
+    </div>
+    <div class="sync-actions">
+      <button class="btn-secondary" id="jumpAudioBtn">🎧 Ir al audio desde aquí</button>
+      <button class="btn-secondary" id="jumpReadBtn">📖 Ir a la página desde aquí</button>
+    </div>
+    <div class="sheet-label" style="margin-top:6px;">Puntos guardados</div>
+    <div class="point-list" id="pointList"></div>
+    <p class="hint-text">Cuantos más puntos añadas repartidos por el libro, más precisa será la sincronización — la app interpola entre ellos en vez de asumir un ritmo constante.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ---------- IndexedDB storage (fresh connection per call) ----------
+  const DB_NAME = 'bookSyncDB';
+  const STORE = 'book';
+
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error('IndexedDB bloqueada por otra pestaña/instancia.'));
+    });
+  }
+  function idbGet(key) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const db = await openDb();
+        const tx = db.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => db.close();
+        tx.onerror = () => db.close();
+      } catch (e) { reject(e); }
+    });
+  }
+  function idbSet(key, val) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const db = await openDb();
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(val, key);
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+      } catch (e) { reject(e); }
+    });
+  }
+
+  // ---------- App state ----------
+  let book = null;
+  let rendition = null;
+  let currentCfi = null;
+  let currentHref = null;
+  let currentPercent = 0;
+  let locationsReady = false;
+  let tocItems = [];
+  let syncPoints = [];
+  let fontSizePct = 100;
+  let flowMode = 'paginated';
+  let appTheme = 'dark';
+  let audioObjectUrl = null;
+
+  const els = {
+    viewer: document.getElementById('viewer'),
+    emptyState: document.getElementById('emptyState'),
+    loadingOverlay: document.getElementById('loadingOverlay'),
+    errorBanner: document.getElementById('errorBanner'),
+    bookTitleDisplay: document.getElementById('bookTitleDisplay'),
+    audioScreen: document.getElementById('audioScreen'),
+    audioEl: null,
+    seekBar: document.getElementById('seekBar'),
+    curTimeLabel: document.getElementById('curTimeLabel'),
+    remTimeLabel: document.getElementById('remTimeLabel'),
+    playBtn: document.getElementById('playBtn'),
+    playIcon: document.getElementById('playIcon'),
+    speedBtn: document.getElementById('speedBtn'),
+  };
+
+  function showError(msg) {
+    els.errorBanner.textContent = msg;
+    els.errorBanner.classList.add('show');
+    setTimeout(() => els.errorBanner.classList.remove('show'), 5000);
+  }
+  function setLoading(on) { els.loadingOverlay.classList.toggle('hidden', !on); }
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function fmtHMS(totalSeconds) {
+    totalSeconds = Math.max(0, Math.round(totalSeconds));
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return h > 0 ? `${h}:${pad2(m)}:${pad2(s)}` : `${m}:${pad2(s)}`;
+  }
+
+  // ---------- Theme (light/dark) — affects app chrome AND reading theme ----------
+  function applyAppTheme() {
+    document.body.classList.toggle('light', appTheme === 'light');
+    document.getElementById('themeBtn').textContent = appTheme === 'light' ? '☀' : '☾';
+    if (rendition) rendition.themes.select(appTheme);
+  }
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    appTheme = appTheme === 'light' ? 'dark' : 'light';
+    applyAppTheme();
+    persistProgress();
+  });
+
+  function registerThemes() {
+    const imgFix = { 'img, image, svg': { 'max-width': '100% !important', 'height': 'auto !important' } };
+    rendition.themes.register('light', {
+      'html, body': { background: '#ffffff !important', color: '#111111 !important' },
+      '*': { color: '#111111 !important', 'border-color': '#111111 !important' },
+      'a, a *': { color: '#5f7233 !important' },
+      ...imgFix
+    });
+    rendition.themes.register('dark', {
+      'html, body': { background: '#14171c !important', color: '#e8e2d4 !important' },
+      '*': { color: '#e8e2d4 !important', 'border-color': '#e8e2d4 !important' },
+      'a, a *': { color: '#a9bd77 !important' },
+      ...imgFix
+    });
+  }
+
+  // ---------- EPUB loading ----------
+  async function loadEpubFromArrayBuffer(arrayBuffer, restore) {
+    setLoading(true);
+    try {
+      if (rendition) { try { rendition.destroy(); } catch (e) {} }
+      book = ePub(arrayBuffer, { replacements: 'blobUrl' });
+      await book.ready;
+
+      rendition = book.renderTo('viewer', { width: '100%', height: '100%', flow: flowMode, spread: 'none' });
+      registerThemes();
+      rendition.themes.select(appTheme);
+      rendition.themes.fontSize(fontSizePct + '%');
+
+      rendition.on('relocated', (location) => {
+        currentCfi = location.start.cfi;
+        currentHref = location.start.href;
+        if (locationsReady) currentPercent = book.locations.percentageFromCfi(currentCfi);
+        updateSyncInfoDisplay();
+        updateProgressIndicator();
+        persistProgress();
+      });
+
+      const savedCfi = restore && restore.lastCfi ? restore.lastCfi : null;
+      await rendition.display(savedCfi || undefined);
+
+      els.emptyState.classList.add('hide');
+      document.getElementById('epubDot').classList.add('loaded');
+
+      book.locations.generate(1000).then(() => {
+        locationsReady = true;
+        if (currentCfi) currentPercent = book.locations.percentageFromCfi(currentCfi);
+        updateSyncInfoDisplay();
+        updateProgressIndicator();
+      }).catch(() => {
+        showError('No se pudieron generar las posiciones exactas del libro; la sincronización usará una aproximación más simple.');
+      });
+
+      const meta = book.package && book.package.metadata;
+      els.bookTitleDisplay.textContent = (meta && meta.title) || 'BookSync';
+
+      book.loaded.navigation.then((nav) => {
+        tocItems = flattenToc(nav.toc || []);
+        renderTocList();
+      }).catch(() => { tocItems = []; });
+
+      updateProgressIndicator();
+    } catch (e) {
+      console.error(e);
+      showError('No se pudo abrir este EPUB. Comprueba que el archivo no esté dañado o protegido con DRM (los libros con DRM de Kindle/Adobe no se pueden abrir así).');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateProgressIndicator() {
+    const el = document.getElementById('progressIndicator');
+    if (!el) return;
+    if (locationsReady) el.textContent = `${(currentPercent * 100).toFixed(1)}%`;
+    else if (book) el.textContent = 'calculando %…';
+    else el.textContent = '—';
+  }
+
+  function flattenToc(items, depth) {
+    depth = depth || 0;
+    let out = [];
+    items.forEach((item) => {
+      out.push({ label: item.label ? item.label.trim() : '(sin título)', href: item.href, depth });
+      if (item.subitems && item.subitems.length) out = out.concat(flattenToc(item.subitems, depth + 1));
+    });
+    return out;
+  }
+  function renderTocList() {
+    const list = document.getElementById('tocList');
+    list.innerHTML = '';
+    if (tocItems.length === 0) { list.innerHTML = '<div class="empty-points">Este EPUB no trae un índice de capítulos legible.</div>'; return; }
+    tocItems.forEach((item) => {
+      const div = document.createElement('div');
+      div.className = 'point-item';
+      div.style.cursor = 'pointer';
+      div.style.paddingLeft = (10 + item.depth * 14) + 'px';
+      const isCurrent = currentHref && currentHref.indexOf(item.href.split('#')[0]) !== -1;
+      if (isCurrent) { div.style.borderColor = 'var(--accent)'; div.style.color = 'var(--ink)'; }
+      div.innerHTML = `<span>${item.label}</span>`;
+      div.addEventListener('click', () => { rendition.display(item.href); document.getElementById('tocOverlay').classList.add('hidden'); });
+      list.appendChild(div);
+    });
+  }
+  const tocOverlay = document.getElementById('tocOverlay');
+  document.getElementById('tocBtn').addEventListener('click', () => {
+    if (!book) { showError('Primero importa un EPUB.'); return; }
+    renderTocList(); tocOverlay.classList.remove('hidden');
+  });
+  document.getElementById('closeToc').addEventListener('click', () => tocOverlay.classList.add('hidden'));
+
+  // ---------- Persistence ----------
+  let persistTimer = null;
+  function persistProgress() {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(async () => {
+      try {
+        await idbSet('lastCfi', currentCfi);
+        await idbSet('syncPoints', syncPoints);
+        await idbSet('fontSizePct', fontSizePct);
+        await idbSet('appTheme', appTheme);
+        await idbSet('flowMode', flowMode);
+      } catch (e) { console.error('persist error', e); }
+    }, 400);
+  }
+
+  // ---------- Tap zones for page turn ----------
+  document.getElementById('tapLeft').addEventListener('click', () => rendition && rendition.prev());
+  document.getElementById('tapRight').addEventListener('click', () => rendition && rendition.next());
+  let touchStartX = null;
+  els.viewer.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  els.viewer.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 40 && rendition) { dx > 0 ? rendition.prev() : rendition.next(); }
+    touchStartX = null;
+  }, { passive: true });
+
+  // ---------- File pickers ----------
+  const epubFileInput = document.getElementById('epubFileInput');
+  const audioFileInput = document.getElementById('audioFileInput');
+  function bindPick(btnId, input) { document.getElementById(btnId).addEventListener('click', () => input.click()); }
+  ['pickEpubBtn', 'pickEpubBtnEmpty'].forEach(id => bindPick(id, epubFileInput));
+  ['pickAudioBtn', 'pickAudioBtnEmpty'].forEach(id => bindPick(id, audioFileInput));
+
+  epubFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setLoading(true);
+    try {
+      const buf = await file.arrayBuffer();
+      await loadEpubFromArrayBuffer(buf, null); // load first, persist after
+      document.getElementById('importOverlay').classList.add('hidden');
+      try {
+        await idbSet('epubBuffer', buf);
+        await idbSet('epubName', file.name);
+      } catch (persistErr) {
+        console.error(persistErr);
+        showError('El libro se abrió bien, pero no se pudo guardar para la próxima vez.');
+      }
+    } catch (err) {
+      console.error(err);
+      showError('No se pudo leer el archivo EPUB seleccionado.');
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  function guessMimeFromName(name, fallback) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    const map = {
+      mp3: 'audio/mpeg', m4a: 'audio/mp4', m4b: 'audio/mp4', aac: 'audio/aac',
+      wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', flac: 'audio/flac', opus: 'audio/opus'
+    };
+    return map[ext] || fallback || 'audio/mpeg';
+  }
+
+  audioFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      // Play directly from the File object — this streams from disk instead of
+      // loading the whole file into memory, which is essential for large
+      // audiobook files (a 2GB file as an in-memory ArrayBuffer will silently
+      // fail or crash the tab on an iPhone).
+      setupAudioFromFile(file);
+      document.getElementById('importOverlay').classList.add('hidden');
+
+      const sizeMB = file.size / (1024 * 1024);
+      if (sizeMB > 700) {
+        showError(`Este audio pesa ${sizeMB.toFixed(0)} MB. Se reproduce con normalidad, pero es demasiado grande para guardarlo de forma fiable en este dispositivo — probablemente tengas que volver a importarlo si cierras la app del todo.`);
+      } else {
+        try {
+          await idbSet('audioFile', file); // Files are Blobs; IndexedDB stores them natively
+          await idbSet('audioName', file.name);
+          await idbSet('audioMime', file.type || guessMimeFromName(file.name));
+        } catch (persistErr) {
+          console.error(persistErr);
+          showError('El audio se cargó bien, pero no se pudo guardar para la próxima vez.');
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      showError('No se pudo cargar el archivo de audio seleccionado.');
+    }
+  });
+
+  // ---------- Audio player ----------
+  function setupAudioFromFile(fileOrBlob, displayName) {
+    if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+
+    // If the browser didn't report a usable MIME type (common for .m4b on iOS),
+    // re-wrap the blob with a guessed type so <audio> knows how to decode it.
+    let playable = fileOrBlob;
+    const name = displayName || fileOrBlob.name || '';
+    if (!fileOrBlob.type || fileOrBlob.type === 'application/octet-stream') {
+      playable = fileOrBlob.slice(0, fileOrBlob.size, guessMimeFromName(name, fileOrBlob.type));
+    }
+
+    audioObjectUrl = URL.createObjectURL(playable);
+
+    if (els.audioEl) { els.audioEl.pause(); els.audioEl.removeAttribute('src'); els.audioEl.load(); els.audioEl.remove(); }
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    audio.setAttribute('playsinline', '');
+    audio.setAttribute('webkit-playsinline', '');
+    audio.style.display = 'none';
+    document.body.appendChild(audio); // some WebKit versions need the element in the DOM to load reliably
+    audio.src = audioObjectUrl;
+    audio.load();
+    els.audioEl = audio;
+
+    els.audioScreen.classList.remove('no-audio');
+    document.getElementById('audioDot').classList.add('loaded');
+    document.getElementById('audioTitle').textContent = name || 'Audiolibro cargado';
+
+    let metadataArrived = false;
+    audio.addEventListener('loadedmetadata', () => { metadataArrived = true; els.seekBar.max = audio.duration || 0; updateAudioLabels(); });
+    audio.addEventListener('canplay', () => { metadataArrived = true; updateAudioLabels(); });
+    audio.addEventListener('timeupdate', () => { if (!seeking) els.seekBar.value = audio.currentTime; updateAudioLabels(); });
+    audio.addEventListener('play', () => setPlayIcon(true));
+    audio.addEventListener('pause', () => setPlayIcon(false));
+    audio.addEventListener('error', () => {
+      const code = audio.error ? audio.error.code : '?';
+      showError(`No se pudo reproducir este archivo (código de error ${code}). El formato puede no ser compatible con Safari, o el archivo podría estar dañado.`);
+    });
+    audio.addEventListener('stalled', () => showError('La carga del audio se ha detenido momentáneamente — si el archivo es muy grande esto puede tardar un poco.'));
+
+    setTimeout(() => {
+      if (!metadataArrived) {
+        showError('El audio lleva varios segundos sin cargar metadatos. Con archivos muy grandes (varios GB), Safari puede tener problemas para reproducirlos directamente. Prueba con un archivo más corto para confirmar si el problema es el tamaño.');
+      }
+    }, 9000);
+
+    idbGet('audioCurrentTime').then(t => { if (t) audio.currentTime = t; }).catch(() => {});
+    updateSyncInfoDisplay();
+  }
+
+  function setPlayIcon(isPlaying) {
+    els.playIcon.innerHTML = isPlaying
+      ? '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>'
+      : '<path d="M8 5v14l11-7Z"/>';
+  }
+  function updateAudioLabels() {
+    const a = els.audioEl;
+    if (!a) return;
+    els.curTimeLabel.textContent = fmtHMS(a.currentTime);
+    els.remTimeLabel.textContent = '-' + fmtHMS((a.duration || 0) - a.currentTime);
+  }
+
+  let seeking = false;
+  els.seekBar.addEventListener('input', () => { seeking = true; });
+  els.seekBar.addEventListener('change', () => { if (els.audioEl) els.audioEl.currentTime = parseFloat(els.seekBar.value); seeking = false; });
+
+  document.getElementById('playBtn').addEventListener('click', () => {
+    if (!els.audioEl) return;
+    if (els.audioEl.paused) {
+      const p = els.audioEl.play();
+      if (p && p.catch) p.catch(err => showError('No se pudo iniciar la reproducción: ' + (err.message || err)));
+    } else {
+      els.audioEl.pause();
+    }
+  });
+  document.getElementById('back15Btn').addEventListener('click', () => { if (els.audioEl) els.audioEl.currentTime = Math.max(0, els.audioEl.currentTime - 15); });
+  document.getElementById('fwd15Btn').addEventListener('click', () => { if (els.audioEl) els.audioEl.currentTime = Math.min(els.audioEl.duration || 1e9, els.audioEl.currentTime + 15); });
+
+  const speeds = [1, 1.25, 1.5, 1.75, 2, 0.75];
+  let speedIdx = 0;
+  document.getElementById('speedBtn').addEventListener('click', () => {
+    speedIdx = (speedIdx + 1) % speeds.length;
+    if (els.audioEl) els.audioEl.playbackRate = speeds[speedIdx];
+    els.speedBtn.textContent = speeds[speedIdx] + 'x';
+  });
+  setInterval(() => { if (els.audioEl && !els.audioEl.paused) idbSet('audioCurrentTime', els.audioEl.currentTime).catch(() => {}); }, 5000);
+
+  // ---------- Tab bar (Leer / Escuchar) ----------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.screen).classList.add('active');
+    });
+  });
+
+  // ---------- Sheets ----------
+  const importOverlay = document.getElementById('importOverlay');
+  document.getElementById('importBtn').addEventListener('click', () => importOverlay.classList.remove('hidden'));
+  document.getElementById('closeImport').addEventListener('click', () => importOverlay.classList.add('hidden'));
+
+  const settingsOverlay = document.getElementById('settingsOverlay');
+  document.getElementById('settingsBtn').addEventListener('click', () => settingsOverlay.classList.remove('hidden'));
+  document.getElementById('closeSettings').addEventListener('click', () => settingsOverlay.classList.add('hidden'));
+
+  document.getElementById('fontMinusBtn').addEventListener('click', () => { fontSizePct = Math.max(70, fontSizePct - 10); applyFontSize(); });
+  document.getElementById('fontPlusBtn').addEventListener('click', () => { fontSizePct = Math.min(200, fontSizePct + 10); applyFontSize(); });
+  function applyFontSize() {
+    document.getElementById('fontSizeValue').textContent = fontSizePct + '%';
+    if (rendition) rendition.themes.fontSize(fontSizePct + '%');
+    persistProgress();
+  }
+
+  document.querySelectorAll('[data-flow]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      document.querySelectorAll('[data-flow]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      flowMode = btn.dataset.flow;
+      persistProgress();
+      if (book) {
+        const buf = await idbGet('epubBuffer').catch(() => null);
+        if (buf) loadEpubFromArrayBuffer(buf, { lastCfi: currentCfi });
+      }
+    });
+  });
+
+  // ---------- Sync sheet ----------
+  const syncOverlay = document.getElementById('syncOverlay');
+  document.getElementById('syncBtn').addEventListener('click', () => { updateSyncInfoDisplay(); renderPointList(); syncOverlay.classList.remove('hidden'); });
+  document.getElementById('closeSync').addEventListener('click', () => syncOverlay.classList.add('hidden'));
+
+  function updateSyncInfoDisplay() {
+    document.getElementById('syncCurrentPercent').textContent = locationsReady ? `Página: ${(currentPercent * 100).toFixed(1)}%` : 'Página: calculando…';
+    document.getElementById('syncCurrentAudio').textContent = els.audioEl ? `Audio: ${fmtHMS(els.audioEl.currentTime)}` : 'Audio: —';
+  }
+
+  document.getElementById('addSyncPointBtn').addEventListener('click', () => {
+    if (!locationsReady) { showError('Espera a que termine de calcular las posiciones del libro.'); return; }
+    if (!els.audioEl) { showError('Primero importa un archivo de audio.'); return; }
+    syncPoints.push({ percent: currentPercent, audioSec: els.audioEl.currentTime });
+    syncPoints.sort((a, b) => a.percent - b.percent);
+    persistProgress();
+    renderPointList();
+  });
+
+  function renderPointList() {
+    const list = document.getElementById('pointList');
+    list.innerHTML = '';
+    if (syncPoints.length === 0) { list.innerHTML = '<div class="empty-points">Aún no has añadido ningún punto.</div>'; return; }
+    syncPoints.forEach((p, idx) => {
+      const div = document.createElement('div');
+      div.className = 'point-item';
+      div.innerHTML = `<span>${(p.percent * 100).toFixed(1)}% → ${fmtHMS(p.audioSec)}</span>`;
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', () => { syncPoints.splice(idx, 1); persistProgress(); renderPointList(); });
+      div.appendChild(delBtn);
+      list.appendChild(div);
+    });
+  }
+
+  function percentToAudio(p) {
+    if (syncPoints.length === 0) return null;
+    if (syncPoints.length === 1) {
+      const only = syncPoints[0];
+      if (only.percent <= 0) return only.audioSec;
+      return (only.audioSec / only.percent) * p;
+    }
+    if (p <= syncPoints[0].percent) {
+      const a = syncPoints[0], b = syncPoints[1];
+      return a.audioSec + ((b.audioSec - a.audioSec) / (b.percent - a.percent)) * (p - a.percent);
+    }
+    if (p >= syncPoints[syncPoints.length - 1].percent) {
+      const a = syncPoints[syncPoints.length - 2], b = syncPoints[syncPoints.length - 1];
+      return b.audioSec + ((b.audioSec - a.audioSec) / (b.percent - a.percent)) * (p - b.percent);
+    }
+    for (let i = 0; i < syncPoints.length - 1; i++) {
+      const a = syncPoints[i], b = syncPoints[i + 1];
+      if (p >= a.percent && p <= b.percent) return a.audioSec + ((b.audioSec - a.audioSec) / (b.percent - a.percent)) * (p - a.percent);
+    }
+    return null;
+  }
+  function audioToPercent(sec) {
+    if (syncPoints.length === 0) return null;
+    if (syncPoints.length === 1) {
+      const only = syncPoints[0];
+      if (only.audioSec <= 0) return only.percent;
+      return (only.percent / only.audioSec) * sec;
+    }
+    if (sec <= syncPoints[0].audioSec) {
+      const a = syncPoints[0], b = syncPoints[1];
+      return a.percent + ((b.percent - a.percent) / (b.audioSec - a.audioSec)) * (sec - a.audioSec);
+    }
+    if (sec >= syncPoints[syncPoints.length - 1].audioSec) {
+      const a = syncPoints[syncPoints.length - 2], b = syncPoints[syncPoints.length - 1];
+      return b.percent + ((b.percent - a.percent) / (b.audioSec - a.audioSec)) * (sec - b.audioSec);
+    }
+    for (let i = 0; i < syncPoints.length - 1; i++) {
+      const a = syncPoints[i], b = syncPoints[i + 1];
+      if (sec >= a.audioSec && sec <= b.audioSec) return a.percent + ((b.percent - a.percent) / (b.audioSec - a.audioSec)) * (sec - a.audioSec);
+    }
+    return null;
+  }
+
+  document.getElementById('jumpAudioBtn').addEventListener('click', () => {
+    if (!els.audioEl) { showError('Primero importa un archivo de audio.'); return; }
+    if (!locationsReady) { showError('Espera a que termine de calcular las posiciones del libro.'); return; }
+    const target = percentToAudio(currentPercent);
+    if (target === null) { showError('Añade al menos un punto de sincronización primero.'); return; }
+    els.audioEl.currentTime = Math.max(0, target);
+    syncOverlay.classList.add('hidden');
+    document.querySelector('.tab-btn[data-screen="audioScreenWrap"]').click();
+  });
+
+  document.getElementById('jumpReadBtn').addEventListener('click', () => {
+    if (!els.audioEl || !book) { showError('Necesitas el libro y el audio cargados.'); return; }
+    if (!locationsReady) { showError('Espera a que termine de calcular las posiciones del libro.'); return; }
+    const targetPercent = audioToPercent(els.audioEl.currentTime);
+    if (targetPercent === null) { showError('Añade al menos un punto de sincronización primero.'); return; }
+    const clamped = Math.min(Math.max(targetPercent, 0), 0.999);
+    rendition.display(book.locations.cfiFromPercentage(clamped));
+    syncOverlay.classList.add('hidden');
+    document.querySelector('.tab-btn[data-screen="readerScreen"]').click();
+  });
+
+  // ---------- Init ----------
+  (async function init() {
+    try {
+      const [epubBuf, audioFile, audioMime, audioName, savedCfi, savedPoints, savedFont, savedTheme, savedFlow] =
+        await Promise.all([
+          idbGet('epubBuffer').catch(() => null), idbGet('audioFile').catch(() => null),
+          idbGet('audioMime').catch(() => null), idbGet('audioName').catch(() => null),
+          idbGet('lastCfi').catch(() => null), idbGet('syncPoints').catch(() => null),
+          idbGet('fontSizePct').catch(() => null), idbGet('appTheme').catch(() => null), idbGet('flowMode').catch(() => null)
+        ]);
+
+      if (savedPoints) syncPoints = savedPoints;
+      if (savedFont) fontSizePct = savedFont;
+      if (savedTheme) appTheme = savedTheme;
+      if (savedFlow) {
+        flowMode = savedFlow;
+        document.querySelectorAll('[data-flow]').forEach(b => b.classList.toggle('active', b.dataset.flow === savedFlow));
+      }
+      document.getElementById('fontSizeValue').textContent = fontSizePct + '%';
+      applyAppTheme();
+
+      if (epubBuf) {
+        els.emptyState.classList.add('hide');
+        await loadEpubFromArrayBuffer(epubBuf, { lastCfi: savedCfi });
+      }
+      if (audioFile) {
+        setupAudioFromFile(audioFile, audioName);
+        els.emptyState.classList.add('hide');
+      }
+      if (!epubBuf && !audioFile) els.emptyState.classList.remove('hide');
+    } catch (e) {
+      console.error(e);
+      showError('No se pudo restaurar tu libro guardado. Prueba a importarlo de nuevo.');
+    }
+  })();
+})();
+</script>
+</body>
+</html>
